@@ -1,19 +1,43 @@
 use core::panic;
-use std::{any::Any, fmt::Display, sync::Arc};
+use std::{
+    any::Any,
+    fmt::Display,
+    sync::{Arc, Mutex},
+};
 
 use arrow::array::BooleanBuilder;
 
 use crate::datatypes::{ColumnVector, DataType, FieldVector, LiteralValueVector, RecordBatch};
 
-use super::accumulator::Accumulator;
+use super::accumulator::{Accumulator, MaxAccumulator};
 
 pub trait Expression: Display {
     fn evaluate(&self, input: Arc<RecordBatch>) -> Arc<dyn ColumnVector>;
 }
 
-pub trait AggregateExpression: Expression {
+/// Interface for aggregate expressions like max, min, avg, and so on.
+///
+/// Note that, this is not a type of [`Expression`].
+pub trait AggregateExpression {
     fn input_expression(&self) -> Arc<dyn Expression>;
-    fn create_accumulator(&self) -> Arc<dyn Accumulator>;
+    fn create_accumulator(&self) -> Arc<Mutex<dyn Accumulator>>;
+}
+
+/// Used for fetching a column by column index
+pub struct ColumnExpression {
+    index: usize,
+}
+
+impl Expression for ColumnExpression {
+    fn evaluate(&self, input: Arc<RecordBatch>) -> Arc<dyn ColumnVector> {
+        input.field(self.index)
+    }
+}
+
+impl Display for ColumnExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "#{}", self.index)
+    }
 }
 
 pub trait BooleanExpression: Expression {
@@ -115,6 +139,43 @@ impl Display for LiteralLongExpression {
     }
 }
 
-fn to_bool(value: Arc<dyn Any>) {
-    todo!()
+pub struct MaxExpression {
+    pub expr: Arc<dyn Expression>,
+}
+
+impl AggregateExpression for MaxExpression {
+    fn input_expression(&self) -> Arc<dyn Expression> {
+        self.expr.clone()
+    }
+
+    fn create_accumulator(&self) -> Arc<Mutex<dyn Accumulator>> {
+        Arc::new(Mutex::new(MaxAccumulator::new()))
+    }
+}
+
+impl Display for MaxExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!("")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn max_expression() {
+        let e = MaxExpression {
+            expr: Arc::new(ColumnExpression { index: 0 }),
+        };
+        let accumulator = e.create_accumulator();
+        let mut accumulator = accumulator.lock().unwrap();
+        let values = [10, 14, 4];
+        values.iter().for_each(|v| accumulator.accumulate(v));
+
+        let result = accumulator.final_value().unwrap();
+        let result = result.downcast_ref::<i32>().unwrap();
+        assert_eq!(*result, 14);
+    }
 }
