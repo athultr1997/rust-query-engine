@@ -55,6 +55,44 @@ impl Accumulator for MaxAccumulator {
     }
 }
 
+/// TODO: remove Arc<dyn Any> by using an Enum
+pub struct SumAccumulator {
+    pub acc_value: Option<Arc<dyn Any>>,
+}
+
+impl Accumulator for SumAccumulator {
+    fn accumulate(&mut self, value: &dyn Any) {
+        // Check if the incoming value is `f64`
+        if let Some(v) = value.downcast_ref::<f64>() {
+            let current_value = match &self.acc_value {
+                // If acc_value has an existing f64, unwrap and add
+                Some(existing) => existing.downcast_ref::<f64>().cloned().unwrap_or(0.0),
+                None => 0.0,
+            };
+            self.acc_value = Some(Arc::new(current_value + *v) as Arc<dyn Any>);
+        }
+        // Check if the incoming value is `usize`
+        else if let Some(v) = value.downcast_ref::<i32>() {
+            let current_value = match &self.acc_value {
+                // If acc_value has an existing f64, unwrap and add, convert `usize` to `f64`
+                Some(existing) => existing.downcast_ref::<i32>().cloned().unwrap_or(0),
+                None => 0,
+            };
+            self.acc_value = Some(Arc::new(current_value + *v) as Arc<dyn Any>);
+        }
+    }
+
+    fn final_value(&self) -> Option<Arc<dyn Any>> {
+        self.acc_value.clone()
+    }
+}
+
+impl SumAccumulator {
+    pub fn new() -> Self {
+        SumAccumulator { acc_value: None }
+    }
+}
+
 /// Helper function to clone Any to Arc<dyn Any>
 fn clone_arc(value: &dyn Any) -> Arc<dyn Any> {
     if let Some(v) = value.downcast_ref::<i8>() {

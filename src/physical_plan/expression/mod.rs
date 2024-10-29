@@ -9,7 +9,7 @@ use arrow::array::BooleanBuilder;
 
 use crate::datatypes::{ColumnVector, DataType, FieldVector, LiteralValueVector, RecordBatch};
 
-use super::accumulator::{Accumulator, MaxAccumulator};
+use super::accumulator::{Accumulator, MaxAccumulator, SumAccumulator};
 
 pub trait Expression: Display {
     fn evaluate(&self, input: Arc<RecordBatch>) -> Arc<dyn ColumnVector>;
@@ -159,6 +159,20 @@ impl Display for MaxExpression {
     }
 }
 
+pub struct SumExpression {
+    pub expr: Arc<dyn Expression>,
+}
+
+impl AggregateExpression for SumExpression {
+    fn input_expression(&self) -> Arc<dyn Expression> {
+        self.expr.clone()
+    }
+
+    fn create_accumulator(&self) -> Arc<Mutex<dyn Accumulator>> {
+        Arc::new(Mutex::new(SumAccumulator::new()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -177,5 +191,20 @@ mod tests {
         let result = accumulator.final_value().unwrap();
         let result = result.downcast_ref::<i32>().unwrap();
         assert_eq!(*result, 14);
+    }
+
+    #[test]
+    fn sum_expression() {
+        let e = SumExpression {
+            expr: Arc::new(ColumnExpression { index: 0 }),
+        };
+        let accumulator = e.create_accumulator();
+        let mut accumulator = accumulator.lock().unwrap();
+        let values = [10, 14, 4];
+        values.iter().for_each(|v| accumulator.accumulate(v));
+
+        let result = accumulator.final_value().unwrap();
+        let result = result.downcast_ref::<i32>().unwrap();
+        assert_eq!(*result, 28);
     }
 }
