@@ -163,13 +163,7 @@ impl Iterator for HashAggregateIterator {
     type Item = RecordBatch;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let map: HashMap<Vec<Box<dyn Any>>, Vec<dyn Accumulator>>;
-        self.input_iter.lock().unwrap().map(|batch| {
-            let group_keys: Vec<Arc<dyn ColumnVector>> = self
-                .group_expr
-                .iter()
-                .map(|ge| ge.evaluate(batch))
-                .collect();
-        });
+        let map: HashMap<Arc<Vec<Box<dyn Any>>>, Vec<Arc<dyn Accumulator>>>;
+        todo!("")
     }
 }

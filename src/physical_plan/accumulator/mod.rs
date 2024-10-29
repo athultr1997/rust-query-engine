@@ -5,12 +5,12 @@ pub trait Accumulator {
     fn final_value(&self) -> Option<Arc<dyn Any>>;
 }
 
-struct MaxAccumulator {
-    acc_value: Option<Arc<dyn Any>>,
+pub struct MaxAccumulator {
+    pub acc_value: Option<Arc<dyn Any>>,
 }
 
 impl MaxAccumulator {
-    fn new() -> Self {
+    pub fn new() -> Self {
         MaxAccumulator { acc_value: None }
     }
     fn compare<T: PartialOrd + 'static>(&self, new_value: &T) -> bool {
