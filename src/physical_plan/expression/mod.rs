@@ -7,7 +7,9 @@ use std::{
 
 use arrow::array::BooleanBuilder;
 
-use crate::datatypes::{ColumnVector, DataType, FieldVector, LiteralValueVector, RecordBatch};
+use crate::datatypes::{
+    ColumnVector, DataType, FieldVector, LiteralValueVector, RecordBatch, ScalarValue,
+};
 
 use super::accumulator::{Accumulator, MaxAccumulator, SumAccumulator};
 
@@ -18,7 +20,7 @@ pub trait Expression: Display {
 /// Interface for aggregate expressions like max, min, avg, and so on.
 ///
 /// Note that, this is not a type of [`Expression`].
-pub trait AggregateExpression {
+pub trait AggregateExpression: Display {
     fn input_expression(&self) -> Arc<dyn Expression>;
     fn create_accumulator(&self) -> Arc<Mutex<dyn Accumulator>>;
 }
@@ -43,12 +45,7 @@ impl Display for ColumnExpression {
 pub trait BooleanExpression: Expression {
     fn left(&self) -> Arc<dyn Expression>;
     fn right(&self) -> Arc<dyn Expression>;
-    fn evaluate_boolean(
-        &self,
-        l: Option<Box<dyn Any>>,
-        r: Option<Box<dyn Any>>,
-        data_type: &DataType,
-    ) -> bool;
+    fn evaluate_boolean(&self, l: ScalarValue, r: ScalarValue, data_type: &DataType) -> bool;
     fn evaluate(&self, input: Arc<RecordBatch>) -> Arc<dyn ColumnVector> {
         let l = self.left().evaluate(input.clone());
         let r = self.right().evaluate(input.clone());
@@ -97,12 +94,7 @@ impl BooleanExpression for AndExpression {
     fn right(&self) -> Arc<dyn Expression> {
         self.right.clone()
     }
-    fn evaluate_boolean(
-        &self,
-        l: Option<Box<dyn Any>>,
-        r: Option<Box<dyn Any>>,
-        data_type: &DataType,
-    ) -> bool {
+    fn evaluate_boolean(&self, l: ScalarValue, r: ScalarValue, data_type: &DataType) -> bool {
         todo!()
     }
 }
@@ -127,7 +119,7 @@ impl Expression for LiteralLongExpression {
     fn evaluate(&self, input: Arc<RecordBatch>) -> Arc<dyn ColumnVector> {
         Arc::new(LiteralValueVector {
             data_type: DataType::Int64Type,
-            value: Some(self.value),
+            value: ScalarValue::Int64(self.value),
             size: input.row_count(),
         })
     }
@@ -155,7 +147,7 @@ impl AggregateExpression for MaxExpression {
 
 impl Display for MaxExpression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!("")
+        write!(f, "MAX({})", self.expr.to_string())
     }
 }
 
@@ -170,6 +162,12 @@ impl AggregateExpression for SumExpression {
 
     fn create_accumulator(&self) -> Arc<Mutex<dyn Accumulator>> {
         Arc::new(Mutex::new(SumAccumulator::new()))
+    }
+}
+
+impl Display for SumExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SUM({})", self.expr.to_string())
     }
 }
 

@@ -1,95 +1,69 @@
+use core::panic;
 use std::{any::Any, sync::Arc};
 
+use crate::datatypes::ScalarValue;
+
 pub trait Accumulator {
-    fn accumulate(&mut self, value: &dyn Any);
-    fn final_value(&self) -> Option<Arc<dyn Any>>;
+    fn accumulate(&mut self, value: ScalarValue);
+    fn final_value(&self) -> ScalarValue;
 }
 
 pub struct MaxAccumulator {
-    pub acc_value: Option<Arc<dyn Any>>,
+    pub acc_value: ScalarValue,
 }
 
 impl MaxAccumulator {
     pub fn new() -> Self {
-        MaxAccumulator { acc_value: None }
-    }
-    fn compare<T: PartialOrd + 'static>(&self, new_value: &T) -> bool {
-        if let Some(current_value) = self.acc_value.as_ref() {
-            if let Some(current_value) = current_value.downcast_ref::<T>() {
-                return new_value > current_value;
-            }
+        MaxAccumulator {
+            acc_value: ScalarValue::Null,
         }
-        true
     }
 }
 
 impl Accumulator for MaxAccumulator {
-    fn accumulate(&mut self, value: &dyn Any) {
-        let is_max = if self.acc_value.is_none() {
-            true
-        } else if let Some(v) = value.downcast_ref::<i8>() {
-            self.compare(v)
-        } else if let Some(v) = value.downcast_ref::<i16>() {
-            self.compare(v)
-        } else if let Some(v) = value.downcast_ref::<i32>() {
-            self.compare(v)
-        } else if let Some(v) = value.downcast_ref::<i64>() {
-            self.compare(v)
-        } else if let Some(v) = value.downcast_ref::<f32>() {
-            self.compare(v)
-        } else if let Some(v) = value.downcast_ref::<f64>() {
-            self.compare(v)
-        } else if let Some(v) = value.downcast_ref::<String>() {
-            self.compare(v)
+    fn accumulate(&mut self, value: ScalarValue) {
+        if self.acc_value != ScalarValue::Null {
+            if self.acc_value < value {
+                self.acc_value = value
+            }
         } else {
-            panic!("MAX is not implemented for this data type")
-        };
-
-        if is_max {
-            self.acc_value = Some(clone_arc(value));
+            self.acc_value = value;
         }
     }
 
-    fn final_value(&self) -> Option<Arc<dyn Any>> {
+    fn final_value(&self) -> ScalarValue {
         self.acc_value.clone()
     }
 }
 
-/// TODO: remove Arc<dyn Any> by using an Enum
 pub struct SumAccumulator {
-    pub acc_value: Option<Arc<dyn Any>>,
+    pub acc_value: ScalarValue,
 }
 
 impl Accumulator for SumAccumulator {
-    fn accumulate(&mut self, value: &dyn Any) {
-        // Check if the incoming value is `f64`
-        if let Some(v) = value.downcast_ref::<f64>() {
-            let current_value = match &self.acc_value {
-                // If acc_value has an existing f64, unwrap and add
-                Some(existing) => existing.downcast_ref::<f64>().cloned().unwrap_or(0.0),
-                None => 0.0,
-            };
-            self.acc_value = Some(Arc::new(current_value + *v) as Arc<dyn Any>);
-        }
-        // Check if the incoming value is `usize`
-        else if let Some(v) = value.downcast_ref::<i32>() {
-            let current_value = match &self.acc_value {
-                // If acc_value has an existing f64, unwrap and add, convert `usize` to `f64`
-                Some(existing) => existing.downcast_ref::<i32>().cloned().unwrap_or(0),
-                None => 0,
-            };
-            self.acc_value = Some(Arc::new(current_value + *v) as Arc<dyn Any>);
+    fn accumulate(&mut self, value: ScalarValue) {
+        if self.acc_value != ScalarValue::Null {
+            match (self.acc_value.clone(), value) {
+                (ScalarValue::Int32(acc), ScalarValue::Int32(v)) => {
+                    self.acc_value = ScalarValue::Int32(acc + v)
+                }
+                _ => panic!("Not yet implemented"),
+            }
+        } else {
+            self.acc_value = value;
         }
     }
 
-    fn final_value(&self) -> Option<Arc<dyn Any>> {
+    fn final_value(&self) -> ScalarValue {
         self.acc_value.clone()
     }
 }
 
 impl SumAccumulator {
     pub fn new() -> Self {
-        SumAccumulator { acc_value: None }
+        SumAccumulator {
+            acc_value: ScalarValue::Null,
+        }
     }
 }
 
@@ -121,91 +95,38 @@ mod tests {
     #[test]
     fn test_max_accumulator_i32() {
         let mut acc = MaxAccumulator::new();
-        acc.accumulate(&5i32);
-        acc.accumulate(&3i32);
-        acc.accumulate(&7i32);
-        acc.accumulate(&2i32);
-        let result = acc.final_value().unwrap();
-        let result = result.downcast_ref::<i32>().unwrap();
-        assert_eq!(*result, 7);
-    }
+        acc.accumulate(ScalarValue::Int32(5));
+        acc.accumulate(ScalarValue::Int32(3));
+        acc.accumulate(ScalarValue::Int32(7));
+        acc.accumulate(ScalarValue::Int32(2));
 
-    #[test]
-    fn test_max_accumulator_f64() {
-        let mut acc = MaxAccumulator::new();
-        acc.accumulate(&3.13f64);
-        acc.accumulate(&2.71f64);
-        acc.accumulate(&3.15f64);
-
-        let result = acc.final_value().unwrap();
-        let result = result.downcast_ref::<f64>().unwrap();
-        assert_eq!(*result, 3.15);
+        let result = acc.final_value();
+        assert_eq!(result, ScalarValue::Int32(7));
     }
 
     #[test]
     fn test_max_accumulator_string() {
         let mut acc = MaxAccumulator::new();
-        acc.accumulate(&"apple".to_string());
-        acc.accumulate(&"banana".to_string());
-        acc.accumulate(&"cherry".to_string());
+        acc.accumulate(ScalarValue::String("apple".to_string()));
+        acc.accumulate(ScalarValue::String("banana".to_string()));
+        acc.accumulate(ScalarValue::String("cherry".to_string()));
 
-        let result = acc.final_value().unwrap();
-        let result = result.downcast_ref::<String>().unwrap();
-        assert_eq!(result, "cherry");
+        let result = acc.final_value();
+        assert_eq!(result, ScalarValue::String("cherry".to_string()));
     }
 
     #[test]
     fn test_max_accumulator_empty() {
         let acc = MaxAccumulator::new();
-        assert!(acc.final_value().is_none());
+        assert_eq!(acc.final_value(), ScalarValue::Null);
     }
 
     #[test]
     fn test_max_accumulator_single_value() {
         let mut acc = MaxAccumulator::new();
-        acc.accumulate(&42i32);
+        acc.accumulate(ScalarValue::Int32(42));
 
-        let result = acc.final_value().unwrap();
-        let result = result.downcast_ref::<i32>().unwrap();
-        assert_eq!(*result, 42);
-    }
-
-    #[test]
-    fn test_max_accumulator_mixed_types() {
-        let mut acc = MaxAccumulator::new();
-        acc.accumulate(&5i32);
-        acc.accumulate(&3.13f64);
-        acc.accumulate(&"hello".to_string());
-
-        // The accumulator should keep the last max value, which is "hello"
-        let result = acc.final_value().unwrap();
-        let result = result.downcast_ref::<String>().unwrap();
-        assert_eq!(result, "hello");
-    }
-
-    // TODO: Better error handling. Should be MAX is not supported.
-    #[test]
-    #[should_panic(expected = "Cloning is not implemented for this data type")]
-    fn test_max_accumulator_unsupported_type() {
-        let mut acc = MaxAccumulator::new();
-        acc.accumulate(&vec![1, 2, 3]);
-    }
-
-    #[test]
-    fn test_max_accumulator_all_supported_types() {
-        let mut acc = MaxAccumulator::new();
-
-        acc.accumulate(&100i8);
-        acc.accumulate(&200i16);
-        acc.accumulate(&300i32);
-        acc.accumulate(&400i64);
-        acc.accumulate(&1.23f32);
-        acc.accumulate(&4.56f64);
-        acc.accumulate(&"xyz".to_string());
-
-        // The accumulator should keep the last max value, which is "xyz"
-        let result = acc.final_value().unwrap();
-        let result = result.downcast_ref::<String>().unwrap();
-        assert_eq!(result, "xyz");
+        let result = acc.final_value();
+        assert_eq!(result, ScalarValue::Int32(42));
     }
 }
