@@ -1,9 +1,12 @@
 use core::{fmt, panic};
-use std::{any::Any, collections::HashSet, fmt::Debug, sync::Arc};
+use std::{any::Any, cmp::Ordering, collections::HashSet, fmt::Debug, hash::Hash, sync::Arc};
 
 use arrow::{
-    array::{Array, BooleanArray, Int16Array, Int32Array, Int8Array, StringArray},
-    datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema},
+    array::{
+        Array, ArrayAccessor, ArrayBuilder, BooleanArray, Int16Array, Int16Builder, Int32Array,
+        Int8Array, Int8Builder, StringArray,
+    },
+    datatypes::{DataType as ArrowDataType, Field as ArrowField, Int8Type, Schema as ArrowSchema},
 };
 
 /// Available data types in QE
@@ -132,9 +135,66 @@ impl SchemaConverter {
     }
 }
 
+#[derive(Debug, Clone, Eq)]
+pub enum ScalarValue {
+    Null,
+    Boolean(bool),
+    Int8(i8),
+    Int16(i16),
+    Int32(i32),
+    Int64(i64),
+    String(String),
+}
+
+impl std::hash::Hash for ScalarValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        use ScalarValue::*;
+        match self {
+            Boolean(v) => v.hash(state),
+            Int8(v) => v.hash(state),
+            Int16(v) => v.hash(state),
+            Int32(v) => v.hash(state),
+            Int64(v) => v.hash(state),
+            String(v) => v.hash(state),
+            _ => panic!("hash not yet implemented"),
+        }
+    }
+}
+
+impl PartialOrd for ScalarValue {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        match (self, other) {
+            (ScalarValue::Null, ScalarValue::Null) => Some(Ordering::Equal),
+            (ScalarValue::Boolean(a), ScalarValue::Boolean(b)) => a.partial_cmp(b),
+            (ScalarValue::Int8(a), ScalarValue::Int8(b)) => a.partial_cmp(b),
+            (ScalarValue::Int16(a), ScalarValue::Int16(b)) => a.partial_cmp(b),
+            (ScalarValue::Int32(a), ScalarValue::Int32(b)) => a.partial_cmp(b),
+            (ScalarValue::Int64(a), ScalarValue::Int64(b)) => a.partial_cmp(b),
+            (ScalarValue::String(a), ScalarValue::String(b)) => a.partial_cmp(b),
+            _ => panic!("Wrong data types compared"),
+        }
+    }
+}
+
+impl PartialEq for ScalarValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            // Null comparison returns true if both are Null
+            (ScalarValue::Null, ScalarValue::Null) => true,
+            (ScalarValue::Boolean(a), ScalarValue::Boolean(b)) => a == b,
+            (ScalarValue::Int8(a), ScalarValue::Int8(b)) => a == b,
+            (ScalarValue::Int16(a), ScalarValue::Int16(b)) => a == b,
+            (ScalarValue::Int32(a), ScalarValue::Int32(b)) => a == b,
+            (ScalarValue::Int64(a), ScalarValue::Int64(b)) => a == b,
+            (ScalarValue::String(a), ScalarValue::String(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
 pub trait ColumnVector {
     fn get_type(&self) -> DataType;
-    fn get_value(&self, i: usize) -> Option<Box<dyn Any>>;
+    fn get_value(&self, i: usize) -> ScalarValue;
     fn size(&self) -> usize;
 }
 
@@ -148,9 +208,9 @@ impl ColumnVector for FieldVector {
         DataType::get_qe_data_type(data_type)
     }
 
-    fn get_value(&self, i: usize) -> Option<Box<dyn Any>> {
-        if self.field_vector.is_null(i) {
-            return None;
+    fn get_value(&self, i: usize) -> ScalarValue {
+        if self.field_vector.len() <= i {
+            panic!("invalid index")
         }
         let data_type = self.get_type();
         match data_type {
@@ -160,7 +220,7 @@ impl ColumnVector for FieldVector {
                     .as_any()
                     .downcast_ref::<BooleanArray>()
                     .unwrap();
-                Some(Box::new(array.value(i)))
+                ScalarValue::Boolean(array.value(i))
             }
             DataType::Int8Type => {
                 let array = self
@@ -168,7 +228,7 @@ impl ColumnVector for FieldVector {
                     .as_any()
                     .downcast_ref::<Int8Array>()
                     .unwrap();
-                Some(Box::new(array.value(i)))
+                ScalarValue::Int8(array.value(i))
             }
             DataType::Int16Type => {
                 let array = self
@@ -176,7 +236,7 @@ impl ColumnVector for FieldVector {
                     .as_any()
                     .downcast_ref::<Int16Array>()
                     .unwrap();
-                Some(Box::new(array.value(i)))
+                ScalarValue::Int16(array.value(i))
             }
             DataType::Int32Type => {
                 let array = self
@@ -184,7 +244,7 @@ impl ColumnVector for FieldVector {
                     .as_any()
                     .downcast_ref::<Int32Array>()
                     .unwrap();
-                Some(Box::new(array.value(i)))
+                ScalarValue::Int32(array.value(i))
             }
             DataType::StringType => {
                 let array = self
@@ -192,7 +252,7 @@ impl ColumnVector for FieldVector {
                     .as_any()
                     .downcast_ref::<StringArray>()
                     .unwrap();
-                Some(Box::new(array.value(i).to_string()))
+                ScalarValue::String(array.value(i).to_string())
             }
             _ => panic!("Unsupported data type"),
         }
@@ -203,13 +263,13 @@ impl ColumnVector for FieldVector {
     }
 }
 
-pub struct LiteralValueVector<T: Debug + Clone> {
+pub struct LiteralValueVector {
     pub data_type: DataType,
     pub size: usize,
-    pub value: Option<T>,
+    pub value: ScalarValue,
 }
 
-impl<T: Debug + Clone + 'static> ColumnVector for LiteralValueVector<T> {
+impl ColumnVector for LiteralValueVector {
     fn get_type(&self) -> DataType {
         self.data_type.clone()
     }
@@ -218,11 +278,11 @@ impl<T: Debug + Clone + 'static> ColumnVector for LiteralValueVector<T> {
         self.size
     }
 
-    fn get_value(&self, i: usize) -> Option<Box<dyn Any>> {
-        if i < 0 || i >= self.size {
+    fn get_value(&self, i: usize) -> ScalarValue {
+        if i >= self.size {
             panic!("Index out of bounds: {}", i);
         }
-        Some(Box::new(self.value.clone()))
+        self.value.clone()
     }
 }
 
@@ -256,18 +316,51 @@ impl RecordBatch {
                     csv_str.push(',')
                 }
                 let value = &self.field_vectors[col_index].get_value(row_index);
-                if let Some(value) = value {
-                    if let Some(s) = value.downcast_ref::<String>() {
-                        csv_str.push_str(s);
-                    } else {
-                        panic!("unexpected condition");
-                    }
+                if let ScalarValue::String(s) = value {
+                    csv_str.push_str(s);
                 } else {
-                    csv_str.push_str("null");
+                    panic!("Unsupported condition")
                 }
             }
             csv_str.push('\n');
         }
         csv_str
+    }
+}
+
+/// Responsible for building a [`FieldVector`] incrementally for any [`DataType`]
+pub struct FieldVectorBuilder {
+    pub data_type: DataType,
+    pub builder: Box<dyn ArrayBuilder>,
+}
+
+impl FieldVectorBuilder {
+    pub fn new(data_type: DataType) -> Self {
+        let builder: Box<dyn ArrayBuilder> = match data_type {
+            DataType::Int8Type => Box::new(Int8Builder::new()),
+            DataType::Int16Type => Box::new(Int16Builder::new()),
+            _ => panic!("Not yet implemented"),
+        };
+        FieldVectorBuilder { data_type, builder }
+    }
+
+    pub fn append(&mut self, value: ScalarValue) {
+        match (self.data_type.clone(), value) {
+            (DataType::Int8Type, ScalarValue::Int8(v)) => {
+                self.builder
+                    .as_any_mut()
+                    .downcast_mut::<Int8Builder>()
+                    .unwrap()
+                    .append_value(v);
+            }
+            _ => panic!("Not implemented append for FieldVectorBuilder for this data type"),
+        }
+    }
+
+    pub fn build(&mut self) -> FieldVector {
+        let array = self.builder.finish();
+        FieldVector {
+            field_vector: Box::new(array),
+        }
     }
 }

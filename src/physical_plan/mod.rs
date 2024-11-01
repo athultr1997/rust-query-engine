@@ -1,13 +1,12 @@
-use expression::Expression;
+use expression::{AggregateExpression, Expression};
 
 use crate::physical_plan::accumulator::Accumulator;
 
-use crate::datatypes::{ColumnVector, RecordBatch, Schema};
-use crate::logical_plan::AggregateExpr;
-use std::any::Any;
+use crate::datatypes::{ColumnVector, FieldVectorBuilder, RecordBatch, ScalarValue, Schema};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Mutex;
+use std::usize;
 use std::{fmt::Write, sync::Arc};
 
 pub mod accumulator;
@@ -115,19 +114,25 @@ pub struct HashAggregateExec {
     pub input: Arc<dyn PhysicalPlan>,
     pub schema: Schema,
     pub group_expr: Vec<Arc<dyn Expression>>,
-    pub aggregate_expr: Vec<Arc<dyn AggregateExpr>>,
+    pub aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
 }
 
 impl PhysicalPlan for HashAggregateExec {
     fn schema(&self) -> Schema {
         self.schema.clone()
     }
+
     fn children(&self) -> Vec<Arc<dyn PhysicalPlan>> {
         vec![self.input.clone()]
     }
 
     fn execute(&self) -> Arc<Mutex<dyn Iterator<Item = RecordBatch>>> {
-        todo!()
+        Arc::new(Mutex::new(HashAggregateIterator {
+            input_iter: self.input.execute(),
+            group_expr: self.group_expr.clone(),
+            aggregate_expr: self.aggregate_expr.clone(),
+            schema: self.schema.clone(),
+        }))
     }
 }
 
@@ -156,14 +161,87 @@ impl Display for HashAggregateExec {
 struct HashAggregateIterator {
     input_iter: Arc<Mutex<dyn Iterator<Item = RecordBatch>>>,
     group_expr: Vec<Arc<dyn Expression>>,
-    aggregate_expr: Vec<Arc<dyn AggregateExpr>>,
+    aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
+    schema: Schema,
 }
 
 impl Iterator for HashAggregateIterator {
     type Item = RecordBatch;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let map: HashMap<Arc<Vec<Box<dyn Any>>>, Vec<Arc<dyn Accumulator>>>;
-        todo!("")
+        let mut map: HashMap<Vec<ScalarValue>, Vec<Arc<Mutex<dyn Accumulator>>>> = HashMap::new();
+        let mut input_iterator = self.input_iter.lock().unwrap();
+        for batch in input_iterator.into_iter() {
+            let batch = Arc::new(batch);
+
+            let group_keys: Vec<Arc<dyn ColumnVector>> = self
+                .group_expr
+                .iter()
+                .map(|ge| ge.evaluate(batch.clone()))
+                .collect();
+
+            let agg_input_values: Vec<Arc<dyn ColumnVector>> = self
+                .aggregate_expr
+                .iter()
+                .map(|ae| ae.input_expression().evaluate(batch.clone()))
+                .collect();
+
+            // for each row in the record batch
+            for row_index in 0..batch.row_count() {
+                // create the grouping key for the row
+                let row_key: Vec<ScalarValue> = group_keys
+                    .iter()
+                    .map(|gk| gk.get_value(row_index))
+                    .collect();
+                println!("row_key = {:?}", row_key);
+
+                // get or create accumulators for this grouping key
+                let accumulators = match map.get(&row_key) {
+                    Some(accumulator) => accumulator.clone(),
+                    None => {
+                        let new_accumulators = self
+                            .aggregate_expr
+                            .iter()
+                            .map(|ae| ae.create_accumulator())
+                            .collect::<Vec<Arc<Mutex<dyn Accumulator>>>>();
+                        map.insert(row_key.clone(), new_accumulators.clone()); // Insert the new accumulator into the map
+                        new_accumulators
+                    }
+                };
+
+                // perform accumulation
+                for (acc_index, acc) in accumulators.iter().enumerate() {
+                    let value = agg_input_values[acc_index].get_value(row_index);
+                    let mut acc = acc.lock().unwrap();
+                    acc.accumulate(value);
+                }
+            }
+        }
+
+        let mut builders: Vec<FieldVectorBuilder> = Vec::with_capacity(self.schema.fields.len());
+
+        // no need to use output_row_index because everything is append only. Nothing is getting
+        // added out of order.
+        for (output_row_index, (grouping_key, accumulators)) in map.iter().enumerate() {
+            for (index, ge) in self.group_expr.clone().iter().enumerate() {
+                builders[index].append(grouping_key[index].clone());
+            }
+            for (index, ae) in self.aggregate_expr.clone().iter().enumerate() {
+                let acc_final_value = accumulators[index].lock().unwrap().final_value();
+                builders[self.group_expr.len() + index].append(acc_final_value);
+            }
+        }
+
+        let arrays: Vec<Arc<dyn ColumnVector>> = builders
+            .iter_mut()
+            .map(|b| Arc::new(b.build()) as Arc<dyn ColumnVector>)
+            .collect();
+
+        let output_batch = RecordBatch {
+            schema: self.schema.clone(),
+            field_vectors: arrays,
+        };
+
+        Some(output_batch)
     }
 }
