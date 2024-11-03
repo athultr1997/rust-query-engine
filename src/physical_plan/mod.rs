@@ -1,8 +1,12 @@
+use arrow::array::{Array, BooleanArray};
 use expression::{AggregateExpression, Expression};
 
+use crate::datasources::DataSource;
 use crate::physical_plan::accumulator::Accumulator;
 
-use crate::datatypes::{ColumnVector, FieldVectorBuilder, RecordBatch, ScalarValue, Schema};
+use crate::datatypes::{
+    ColumnVector, DataType, FieldVector, FieldVectorBuilder, RecordBatch, ScalarValue, Schema,
+};
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::sync::Mutex;
@@ -14,7 +18,7 @@ pub mod expression;
 
 /// Executes Logical Plan against data.
 pub trait PhysicalPlan: Display {
-    /// The output schema from running this Physical Plan.s
+    /// The output schema from running this Physical Plan
     fn schema(&self) -> Schema;
     /// Executes the physical plan to get results.
     fn execute(&self) -> Arc<Mutex<dyn Iterator<Item = RecordBatch>>>;
@@ -37,6 +41,41 @@ pub fn format(plan: &dyn PhysicalPlan, indent: Option<usize>) -> String {
     plan_str
 }
 
+/// Scan a [`DataSource`] with optional push-down projection
+///
+/// Physically reads data from the [`DataSource`] and gives out [`RecordBatch`]es.
+pub struct ScanExec {
+    pub data_source: Arc<dyn DataSource>,
+    pub projection: Vec<String>,
+}
+
+impl PhysicalPlan for ScanExec {
+    fn schema(&self) -> Schema {
+        self.data_source.schema().select(self.projection.clone())
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalPlan>> {
+        vec![]
+    }
+
+    fn execute(&self) -> Arc<Mutex<dyn Iterator<Item = RecordBatch>>> {
+        self.data_source.scan(self.projection.clone())
+    }
+}
+
+impl Display for ScanExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let proj_str = self.projection.join(", ");
+        write!(
+            f,
+            "ScanExec: schema={:?}, projection={}",
+            self.schema(),
+            proj_str
+        )
+    }
+}
+
+/// Executes a Projection
 pub struct ProjectionExec {
     pub input: Arc<dyn PhysicalPlan>,
     pub schema: Schema,
@@ -110,8 +149,101 @@ impl ProjectionIterator {
     }
 }
 
+/// Represents the execution of a Filter node which filters the data based on the output of various
+/// expressions.
+pub struct FilterExec {
+    // Represents the underlying input data which will be filtered.
+    pub input: Arc<dyn PhysicalPlan>,
+    // This expression must evaluate to boolean else this execution will fail.
+    pub expression: Arc<dyn Expression>,
+}
+
+impl PhysicalPlan for FilterExec {
+    fn schema(&self) -> Schema {
+        self.input.schema().clone()
+    }
+
+    fn children(&self) -> Vec<Arc<dyn PhysicalPlan>> {
+        vec![self.input.clone()]
+    }
+
+    fn execute(&self) -> Arc<Mutex<dyn Iterator<Item = RecordBatch>>> {
+        Arc::new(Mutex::new(FilterExecIterator {
+            input_iter: self.input.execute(),
+            expr: self.expression.clone(),
+            schema: self.schema(),
+        }))
+    }
+}
+
+impl Display for FilterExec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        todo!()
+    }
+}
+
+struct FilterExecIterator {
+    input_iter: Arc<Mutex<dyn Iterator<Item = RecordBatch>>>,
+    expr: Arc<dyn Expression>,
+    schema: Schema,
+}
+
+impl Iterator for FilterExecIterator {
+    type Item = RecordBatch;
+
+    // TODO: Solve the additional cloning of RecordBatch here.
+    fn next(&mut self) -> Option<Self::Item> {
+        let input_record_batch = self.input_iter.lock().unwrap().next().unwrap();
+        let output_column_count = input_record_batch.schema.fields.len();
+        let result = self.expr.evaluate(input_record_batch.clone().into());
+        let output_schema = self.schema.clone();
+        let mut filtered_fields = vec![];
+        for index in 0..output_column_count {
+            let filtered_field = self.filter_rows(
+                input_record_batch.field_vectors[index].clone(),
+                result.clone(),
+            );
+            filtered_fields.push(filtered_field);
+        }
+        Some(RecordBatch {
+            schema: output_schema,
+            field_vectors: filtered_fields,
+        })
+    }
+}
+
+impl FilterExecIterator {
+    // TODO: Vectorize this.
+    fn filter_rows(
+        &self,
+        value_vector: Arc<dyn ColumnVector>,
+        filter: Arc<dyn ColumnVector>,
+    ) -> Arc<dyn ColumnVector> {
+        assert_eq!(
+            filter.get_type(),
+            DataType::BooleanType,
+            "return type of filter expression should be BooleanType"
+        );
+
+        let mut builder = FieldVectorBuilder::new(value_vector.get_type());
+        for index in 0..value_vector.size() {
+            match filter.get_value(index) {
+                ScalarValue::Boolean(v) => {
+                    if v {
+                        builder.append(value_vector.get_value(index));
+                    }
+                }
+                _ => panic!("inconsistent vector!"),
+            }
+        }
+
+        Arc::new(builder.build()) as Arc<dyn ColumnVector>
+    }
+}
+
 pub struct HashAggregateExec {
     pub input: Arc<dyn PhysicalPlan>,
+    // the output schema from the hash aggregate plan node
     pub schema: Schema,
     pub group_expr: Vec<Arc<dyn Expression>>,
     pub aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
@@ -127,7 +259,7 @@ impl PhysicalPlan for HashAggregateExec {
     }
 
     fn execute(&self) -> Arc<Mutex<dyn Iterator<Item = RecordBatch>>> {
-        Arc::new(Mutex::new(HashAggregateIterator {
+        Arc::new(Mutex::new(HashAggregateExecIterator {
             input_iter: self.input.execute(),
             group_expr: self.group_expr.clone(),
             aggregate_expr: self.aggregate_expr.clone(),
@@ -158,14 +290,14 @@ impl Display for HashAggregateExec {
     }
 }
 
-struct HashAggregateIterator {
+struct HashAggregateExecIterator {
     input_iter: Arc<Mutex<dyn Iterator<Item = RecordBatch>>>,
     group_expr: Vec<Arc<dyn Expression>>,
     aggregate_expr: Vec<Arc<dyn AggregateExpression>>,
     schema: Schema,
 }
 
-impl Iterator for HashAggregateIterator {
+impl Iterator for HashAggregateExecIterator {
     type Item = RecordBatch;
 
     fn next(&mut self) -> Option<Self::Item> {

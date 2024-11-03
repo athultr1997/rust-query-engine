@@ -1,14 +1,17 @@
+use core::panic;
 use std::sync::Arc;
 
 use crate::{
     datatypes::Schema,
     logical_plan::{
         convert_expr_to_type, convert_plan_to_type, LogicalExpr, LogicalExprType, LogicalPlan,
-        LogicalPlanType,
+        LogicalPlanType, Max, Min,
     },
     physical_plan::{
-        expression::{Expression, LiteralLongExpression},
-        PhysicalPlan, ProjectionExec,
+        expression::{
+            AggregateExpression, Expression, LiteralLongExpression, MaxExpression, SumExpression,
+        },
+        FilterExec, HashAggregateExec, PhysicalPlan, ProjectionExec, ScanExec,
     },
 };
 
@@ -22,8 +25,18 @@ impl DefaultQueryPlanner {
     fn create_physical_plan(&self, logical_plan: Arc<dyn LogicalPlan>) -> Arc<dyn PhysicalPlan> {
         let logical_plan_type = convert_plan_to_type(logical_plan);
         match logical_plan_type {
-            LogicalPlanType::Scan(scan) => todo!(),
-            LogicalPlanType::Selection(selection) => todo!(),
+            LogicalPlanType::Scan(scan) => Arc::new(ScanExec {
+                data_source: scan.data_source.clone(),
+                projection: scan.projection.clone(),
+            }),
+            LogicalPlanType::Filter(filter) => {
+                let input = self.create_physical_plan(filter.input.clone());
+                let filter_expr = self.create_physical_expr(filter.expr.clone(), &(*filter.input));
+                Arc::new(FilterExec {
+                    input,
+                    expression: filter_expr,
+                })
+            }
             LogicalPlanType::Projection(projection) => {
                 let input = self.create_physical_plan(projection.clone());
                 let projection_expr: Vec<Arc<dyn Expression>> = projection
@@ -43,7 +56,37 @@ impl DefaultQueryPlanner {
                     expr: projection_expr,
                 })
             }
-            LogicalPlanType::Aggregate(aggregate) => todo!(),
+            LogicalPlanType::Aggregate(aggregate) => {
+                let input = self.create_physical_plan(aggregate.input.clone());
+                let group_exprs: Vec<Arc<dyn Expression>> = aggregate
+                    .group_expr
+                    .iter()
+                    .map(|ge| self.create_physical_expr(ge.clone(), &(*aggregate.input)))
+                    .collect();
+                let agg_exprs: Vec<Arc<dyn AggregateExpression>> = aggregate
+                    .aggregate_expr
+                    .iter()
+                    .map(|ae| {
+                        if let Some(max_expression) = ae.as_any().downcast_ref::<Max>() {
+                            Arc::new(MaxExpression {
+                                expr: self.create_physical_expr(ae.expr(), &(*aggregate.input)),
+                            }) as Arc<dyn AggregateExpression>
+                        } else if let Some(sum_expression) = ae.as_any().downcast_ref::<Min>() {
+                            Arc::new(SumExpression {
+                                expr: self.create_physical_expr(ae.expr(), &(*aggregate.input)),
+                            }) as Arc<dyn AggregateExpression>
+                        } else {
+                            panic!("Aggregate query plan not yet implemented for this aggregation");
+                        }
+                    })
+                    .collect();
+                Arc::new(HashAggregateExec {
+                    input,
+                    schema: aggregate.schema(),
+                    group_expr: group_exprs,
+                    aggregate_expr: agg_exprs,
+                })
+            }
             LogicalPlanType::Limit(limit) => todo!(),
         }
     }
