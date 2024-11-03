@@ -184,11 +184,12 @@ mod tests {
         let accumulator = e.create_accumulator();
         let mut accumulator = accumulator.lock().unwrap();
         let values = [10, 14, 4];
-        values.iter().for_each(|v| accumulator.accumulate(v));
+        values
+            .iter()
+            .for_each(|&v| accumulator.accumulate(ScalarValue::Int32(v)));
 
-        let result = accumulator.final_value().unwrap();
-        let result = result.downcast_ref::<i32>().unwrap();
-        assert_eq!(*result, 14);
+        let result = accumulator.final_value();
+        assert_eq!(result, ScalarValue::Int32(14));
     }
 
     #[test]
@@ -199,10 +200,11 @@ mod tests {
         let accumulator = e.create_accumulator();
         let mut accumulator = accumulator.lock().unwrap();
         let values = [10, 14, 4];
-        values.iter().for_each(|v| accumulator.accumulate(v));
+        values
+            .iter()
+            .for_each(|&v| accumulator.accumulate(ScalarValue::Int32(v)));
 
-        let result = accumulator.final_value().unwrap();
-        let result = result.downcast_ref::<i32>().unwrap();
-        assert_eq!(*result, 28);
+        let result = accumulator.final_value();
+        assert_eq!(result, ScalarValue::Int32(28));
     }
 }

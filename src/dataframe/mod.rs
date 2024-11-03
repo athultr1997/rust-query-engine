@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     datatypes::Schema,
-    logical_plan::{Aggregate, AggregateExpr, LogicalExpr, LogicalPlan, Projection, Selection},
+    logical_plan::{Aggregate, AggregateExpr, Filter, LogicalExpr, LogicalPlan, Projection},
 };
 
 /// Helps build Logical Query Plans in a user-friendly way
@@ -34,7 +34,7 @@ impl Dataframe for DataframeImpl {
 
     fn filter(&self, expr: Arc<dyn LogicalExpr>) -> Arc<dyn Dataframe> {
         Arc::new(DataframeImpl {
-            plan: Arc::new(Selection {
+            plan: Arc::new(Filter {
                 input: self.plan.clone(),
                 expr,
             }),
@@ -113,7 +113,7 @@ mod tests {
         let actual_logical_plan = format(df.get_logical_plan().as_ref(), None);
         println!("{}", actual_logical_plan);
 
-        let expected_logical_plan = "Projection: #id, #first_name, #last_name\n\tSelection: #state = 'CO'\n\t\tScan: employee; projection=[]\n";
+        let expected_logical_plan = "Projection: #id, #first_name, #last_name\n\tFilter: #state = 'CO'\n\t\tScan: employee; projection=[]\n";
 
         assert_eq!(expected_logical_plan, actual_logical_plan);
     }

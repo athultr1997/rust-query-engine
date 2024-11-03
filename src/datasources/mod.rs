@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fs::File, sync::Arc};
+use std::{
+    collections::HashMap,
+    fs::File,
+    sync::{Arc, Mutex},
+};
 
 use arrow::array::{
     BooleanBuilder, Float16Builder, Float32Builder, Int16Builder, Int32Builder, Int64Builder,
@@ -12,7 +16,7 @@ pub trait DataSource {
     /// Returns the Schema for the underlying data source.
     fn schema(&self) -> Schema;
     // TODO: Move Vec<RecordBatch> to a lazy evaluation
-    fn scan(&self, projection: Vec<String>) -> Box<dyn Iterator<Item = RecordBatch>>;
+    fn scan(&self, projection: Vec<String>) -> Arc<Mutex<dyn Iterator<Item = RecordBatch>>>;
 }
 
 pub struct CsvDataSource {
@@ -27,14 +31,18 @@ impl DataSource for CsvDataSource {
         self.infer_schema()
     }
 
-    fn scan(&self, projection: Vec<String>) -> Box<dyn Iterator<Item = RecordBatch>> {
+    fn scan(&self, projection: Vec<String>) -> Arc<Mutex<dyn Iterator<Item = RecordBatch>>> {
         let file = File::open(self.filename.clone()).unwrap();
         // TODO: move to lazy
         let read_schema = self.infer_schema().select(projection);
         let reader = csv::ReaderBuilder::new()
             .has_headers(true)
             .from_reader(file);
-        Box::new(ReadIterator::new(read_schema, reader, self.batch_size))
+        Arc::new(Mutex::new(ReadIterator::new(
+            read_schema,
+            reader,
+            self.batch_size,
+        )))
     }
 }
 
@@ -247,12 +255,12 @@ impl DataSource for InMemoryDataSource {
 
     /// Each scan of an [`InMemoryDataSource`] creates an iterator over the copy of the entire
     /// data.
-    fn scan(&self, projection: Vec<String>) -> Box<dyn Iterator<Item = RecordBatch>> {
-        Box::new(InMemoryDataSourceIterator::new(
+    fn scan(&self, projection: Vec<String>) -> Arc<Mutex<dyn Iterator<Item = RecordBatch>>> {
+        Arc::new(Mutex::new(InMemoryDataSourceIterator::new(
             projection,
             self.schema.clone(),
             self.data.clone(),
-        ))
+        )))
     }
 }
 
@@ -302,7 +310,7 @@ impl InMemoryDataSourceIterator {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use std::{borrow::Borrow, collections::HashSet};
 
     use super::*;
 
@@ -347,7 +355,8 @@ mod tests {
         };
         let projection: Vec<_> = vec!["id", "name"].into_iter().map(String::from).collect();
         let iterator = csv_data_source.scan(projection.clone());
-        for val in iterator {
+        let mut iter = iterator.lock().unwrap();
+        while let Some(val) = iter.next() {
             let field = val.field(0);
             assert_eq!(field.size(), 5);
 

@@ -2,8 +2,8 @@ use core::panic;
 use std::{collections::HashSet, sync::Arc};
 
 use crate::logical_plan::{
-    Aggregate, AggregateExpr, BinaryExpr, CastExpr, Column, ColumnIndex, Count, Eq, LiteralLong,
-    LiteralString, LogicalExpr, LogicalPlan, Max, Min, Projection, Scan, Selection,
+    Aggregate, AggregateExpr, BinaryExpr, CastExpr, Column, ColumnIndex, Count, Eq, Filter,
+    LiteralLong, LiteralString, LogicalExpr, LogicalPlan, Max, Min, Projection, Scan,
 };
 
 trait Optimizer {
@@ -44,11 +44,11 @@ impl ProjectionPushDownRule {
                 expr: projection.expr.clone(),
                 input,
             })
-        } else if let Some(selection) = plan.as_any().downcast_ref::<Selection>() {
-            extract_column(selection.expr.clone(), &*selection.input, col_names);
-            let input = self.push_down(&*selection.input, col_names);
-            Arc::new(Selection {
-                expr: selection.expr.clone(),
+        } else if let Some(filter) = plan.as_any().downcast_ref::<Filter>() {
+            extract_column(filter.expr.clone(), &*filter.input, col_names);
+            let input = self.push_down(&*filter.input, col_names);
+            Arc::new(Filter {
+                expr: filter.expr.clone(),
                 input,
             })
         } else if let Some(aggregate) = plan.as_any().downcast_ref::<Aggregate>() {
@@ -194,7 +194,7 @@ mod tests {
         let actual_optimized_plan_str = format(&*optimized_plan, None);
         println!("final optimized plan:\n{}", actual_optimized_plan_str);
 
-        let expected_optimized_plan_str = "Projection: #id, #first_name, #last_name\n\tSelection: #state = 'CO'\n\t\tScan: employee; projection=[first_name, id, last_name, state]\n";
+        let expected_optimized_plan_str = "Projection: #id, #first_name, #last_name\n\tFilter: #state = 'CO'\n\t\tScan: employee; projection=[first_name, id, last_name, state]\n";
 
         assert_eq!(expected_optimized_plan_str, actual_optimized_plan_str);
     }

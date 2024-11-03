@@ -14,7 +14,7 @@ pub enum LogicalPlanType {
     Scan(Arc<Scan>),
     Limit(Arc<Limit>),
     Aggregate(Arc<Aggregate>),
-    Selection(Arc<Selection>),
+    Filter(Arc<Filter>),
 }
 
 /// Represents a relation with a known schema. Each logical plan have zero or more logical plan as
@@ -93,12 +93,12 @@ impl Display for Scan {
 }
 
 /// Represents a filter over an input
-pub struct Selection {
+pub struct Filter {
     pub input: Arc<dyn LogicalPlan>,
     pub expr: Arc<dyn LogicalExpr>,
 }
 
-impl LogicalPlan for Selection {
+impl LogicalPlan for Filter {
     fn schema(&self) -> Schema {
         self.input.schema()
     }
@@ -112,13 +112,13 @@ impl LogicalPlan for Selection {
     }
 
     fn into_enum(self: Arc<Self>) -> LogicalPlanType {
-        LogicalPlanType::Selection(self)
+        LogicalPlanType::Filter(self)
     }
 }
 
-impl Display for Selection {
+impl Display for Filter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Selection: {}", self.expr)
+        write!(f, "Filter: {}", self.expr)
     }
 }
 
@@ -429,7 +429,7 @@ pub trait BooleanBinaryExpr: BinaryExpr {
 
 pub trait AggregateExpr: LogicalExpr {
     fn name(&self) -> String;
-    fn expr(&self) -> &dyn LogicalExpr;
+    fn expr(&self) -> Arc<dyn LogicalExpr>;
     fn to_field(&self, input: &dyn LogicalPlan) -> Field {
         Field {
             name: self.name(),
@@ -449,8 +449,8 @@ impl AggregateExpr for Max {
     fn name(&self) -> String {
         "MAX".to_string()
     }
-    fn expr(&self) -> &dyn LogicalExpr {
-        self.input.as_ref()
+    fn expr(&self) -> Arc<dyn LogicalExpr> {
+        self.input.clone()
     }
 }
 
@@ -481,8 +481,8 @@ impl AggregateExpr for Min {
     fn name(&self) -> String {
         "MIN".to_string()
     }
-    fn expr(&self) -> &dyn LogicalExpr {
-        self.input.as_ref()
+    fn expr(&self) -> Arc<dyn LogicalExpr> {
+        self.input.clone()
     }
 }
 
@@ -512,8 +512,8 @@ impl AggregateExpr for Count {
     fn name(&self) -> String {
         "COUNT".to_string()
     }
-    fn expr(&self) -> &dyn LogicalExpr {
-        self.input.as_ref()
+    fn expr(&self) -> Arc<dyn LogicalExpr> {
+        self.input.clone()
     }
 }
 
@@ -634,12 +634,12 @@ mod tests {
                 str: "CO".to_string(),
             }),
         };
-        let selection = Selection {
+        let filter = Filter {
             input: Arc::new(scan),
             expr: Arc::new(filter_expr),
         };
         let plan = Projection {
-            input: Arc::new(selection),
+            input: Arc::new(filter),
             expr: vec![
                 Arc::new(Column {
                     name: "id".to_string(),
@@ -655,7 +655,7 @@ mod tests {
         let actual_plan_str = format(&plan, None);
         println!("{}", actual_plan_str);
 
-        let expected_plan_str = "Projection: #id, #first_name, #last_name\n\tSelection: #state = 'CO'\n\t\tScan: testdata/test.csv; projection=[]\n";
+        let expected_plan_str = "Projection: #id, #first_name, #last_name\n\tFilter: #state = 'CO'\n\t\tScan: testdata/test.csv; projection=[]\n";
         assert_eq!(actual_plan_str, expected_plan_str);
     }
 
