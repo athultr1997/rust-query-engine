@@ -27,7 +27,7 @@ pub trait AggregateExpression: Display {
 
 /// Used for fetching a column by column index
 pub struct ColumnExpression {
-    index: usize,
+    pub index: usize,
 }
 
 impl Expression for ColumnExpression {
