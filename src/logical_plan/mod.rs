@@ -253,6 +253,22 @@ pub enum LogicalExprType {
     Eq(Arc<Eq>),
 }
 
+impl Display for LogicalExprType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogicalExprType::Column(inner) => write!(f, "{}", inner),
+            LogicalExprType::ColumnIndex(inner) => write!(f, "{}", inner),
+            LogicalExprType::LiteralString(inner) => write!(f, "{}", inner),
+            LogicalExprType::LiteralLong(inner) => write!(f, "{}", inner),
+            LogicalExprType::Max(inner) => write!(f, "{}", inner),
+            LogicalExprType::Min(inner) => write!(f, "{}", inner),
+            LogicalExprType::Count(inner) => write!(f, "{}", inner),
+            LogicalExprType::CastExpr(inner) => write!(f, "{}", inner),
+            LogicalExprType::Eq(inner) => write!(f, "{}", inner),
+        }
+    }
+}
+
 pub fn col(name: String) -> Column {
     Column { name }
 }

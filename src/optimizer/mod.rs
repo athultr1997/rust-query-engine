@@ -6,7 +6,7 @@ use crate::logical_plan::{
     LiteralLong, LiteralString, LogicalExpr, LogicalPlan, Max, Min, Projection, Scan,
 };
 
-trait Optimizer {
+pub trait Optimizer {
     fn optimize(&self, plan: &dyn LogicalPlan) -> Arc<dyn LogicalPlan>;
 }
 
@@ -14,11 +14,18 @@ trait Rule {
     fn optimize(&self, plan: &dyn LogicalPlan) -> Arc<dyn LogicalPlan>;
 }
 
-struct DefaultOptimizer {}
+pub struct DefaultOptimizer {}
 
 impl Optimizer for DefaultOptimizer {
     fn optimize(&self, plan: &dyn LogicalPlan) -> Arc<dyn LogicalPlan> {
-        todo!()
+        let rule = ProjectionPushDownRule {};
+        rule.optimize(plan)
+    }
+}
+
+impl DefaultOptimizer {
+    pub fn new() -> Self {
+        DefaultOptimizer {}
     }
 }
 

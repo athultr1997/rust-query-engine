@@ -9,7 +9,8 @@ use crate::{
     },
     physical_plan::{
         expression::{
-            AggregateExpression, Expression, LiteralLongExpression, MaxExpression, SumExpression,
+            AggregateExpression, ColumnExpression, Expression, LiteralLongExpression,
+            MaxExpression, SumExpression,
         },
         FilterExec, HashAggregateExec, PhysicalPlan, ProjectionExec, ScanExec,
     },
@@ -22,6 +23,10 @@ struct DefaultQueryPlanner {}
 impl QueryPlanner for DefaultQueryPlanner {}
 
 impl DefaultQueryPlanner {
+    fn new() -> Self {
+        DefaultQueryPlanner {}
+    }
+
     fn create_physical_plan(&self, logical_plan: Arc<dyn LogicalPlan>) -> Arc<dyn PhysicalPlan> {
         let logical_plan_type = convert_plan_to_type(logical_plan);
         match logical_plan_type {
@@ -104,7 +109,18 @@ impl DefaultQueryPlanner {
             LogicalExprType::LiteralLong(literal_long) => Arc::new(LiteralLongExpression {
                 value: literal_long.val,
             }),
-            _ => todo!(),
+            LogicalExprType::Column(column) => {
+                match input
+                    .schema()
+                    .fields
+                    .iter()
+                    .position(|f| f.name == column.name)
+                {
+                    Some(index) => Arc::new(ColumnExpression { index }),
+                    None => panic!("column not found in schema"),
+                }
+            }
+            _ => panic!("not yet implemented"),
         }
     }
 }
@@ -117,7 +133,10 @@ mod tests {
         dataframe::{Dataframe, DataframeImpl},
         datasources::InMemoryDataSource,
         datatypes::{DataType, Field, Schema},
-        logical_plan::{col, max, AggregateExpr, LogicalExpr, Scan},
+        logical_plan::{col, format, max, AggregateExpr, LogicalExpr, Scan},
+        optimizer::{DefaultOptimizer, Optimizer},
+        physical_plan::format as physical_plan_format,
+        query_planner::DefaultQueryPlanner,
     };
 
     #[test]
@@ -130,7 +149,7 @@ mod tests {
                 },
                 Field {
                     name: "max_fare".to_string(),
-                    data_type: DataType::Float32Type,
+                    data_type: DataType::Int32Type,
                 },
             ],
         };
@@ -153,7 +172,23 @@ mod tests {
             .into_iter()
             .map(|e| Arc::clone(&e) as Arc<dyn AggregateExpr>)
             .collect();
-        let plan = df.aggregate(group_expr, aggregate_expr);
-        // TODO: complete the test case
+        let df = df.aggregate(group_expr, aggregate_expr);
+
+        let logical_plan = df.get_logical_plan();
+        let logical_plan_str = format(&(*logical_plan), None);
+        println!("logical_plan = {}", logical_plan_str);
+        assert_eq!(logical_plan_str, "Aggregate: group_expr=[#passenger_count], aggregate_expr=[MAX(#max_fare)]\n\tScan: ; projection=[]\n");
+
+        let optimizer = DefaultOptimizer::new();
+        let optimized_logical_plan = optimizer.optimize(&(*logical_plan));
+        let optimized_logical_plan_str = format(&(*optimized_logical_plan), None);
+        println!("optimized logical_plan = {}", optimized_logical_plan_str);
+        assert_eq!(optimized_logical_plan_str, "Aggregate: group_expr=[#passenger_count], aggregate_expr=[MAX(#max_fare)]\n\tScan: ; projection=[max_fare, passenger_count]\n");
+
+        let query_planner = DefaultQueryPlanner::new();
+        let physical_plan = query_planner.create_physical_plan(optimized_logical_plan.clone());
+        let physical_plan_str = physical_plan_format(&(*physical_plan), None);
+        println!("physical_plan = {}", physical_plan_str);
+        assert_eq!(physical_plan_str, "HashAggregateExec: group_expr=[#0], aggregate_expr=[MAX(#1)]\n\tScanExec: schema=Schema { fields: [Field { name: \"passenger_count\", data_type: Int32Type }, Field { name: \"max_fare\", data_type: Int32Type }] }, projection=max_fare, passenger_count\n");
     }
 }
