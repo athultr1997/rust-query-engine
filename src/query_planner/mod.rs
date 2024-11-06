@@ -4,30 +4,33 @@ use std::sync::Arc;
 use crate::{
     datatypes::Schema,
     logical_plan::{
-        convert_expr_to_type, convert_plan_to_type, LogicalExpr, LogicalExprType, LogicalPlan,
+        convert_expr_to_type, convert_plan_to_type, Eq, LogicalExpr, LogicalExprType, LogicalPlan,
         LogicalPlanType, Max, Min,
     },
     physical_plan::{
         expression::{
-            AggregateExpression, ColumnExpression, Expression, LiteralLongExpression,
-            MaxExpression, SumExpression,
+            AggregateExpression, ColumnExpression, EqExpression, Expression, LiteralLongExpression,
+            LiteralStringExpression, MaxExpression, SumExpression,
         },
         FilterExec, HashAggregateExec, PhysicalPlan, ProjectionExec, ScanExec,
     },
 };
 
-trait QueryPlanner {}
+pub trait QueryPlanner {}
 
-struct DefaultQueryPlanner {}
+pub struct DefaultQueryPlanner {}
 
 impl QueryPlanner for DefaultQueryPlanner {}
 
 impl DefaultQueryPlanner {
-    fn new() -> Self {
+    pub fn new() -> Self {
         DefaultQueryPlanner {}
     }
 
-    fn create_physical_plan(&self, logical_plan: Arc<dyn LogicalPlan>) -> Arc<dyn PhysicalPlan> {
+    pub fn create_physical_plan(
+        &self,
+        logical_plan: Arc<dyn LogicalPlan>,
+    ) -> Arc<dyn PhysicalPlan> {
         let logical_plan_type = convert_plan_to_type(logical_plan);
         match logical_plan_type {
             LogicalPlanType::Scan(scan) => Arc::new(ScanExec {
@@ -43,7 +46,7 @@ impl DefaultQueryPlanner {
                 })
             }
             LogicalPlanType::Projection(projection) => {
-                let input = self.create_physical_plan(projection.clone());
+                let input = self.create_physical_plan(projection.input.clone());
                 let projection_expr: Vec<Arc<dyn Expression>> = projection
                     .expr
                     .iter()
@@ -103,9 +106,9 @@ impl DefaultQueryPlanner {
     ) -> Arc<dyn Expression> {
         let logical_expr_type = convert_expr_to_type(expr);
         match logical_expr_type {
-            LogicalExprType::LiteralString(literal_string) => {
-                todo!()
-            }
+            LogicalExprType::LiteralString(literal_string) => Arc::new(LiteralStringExpression {
+                value: literal_string.str.clone(),
+            }),
             LogicalExprType::LiteralLong(literal_long) => Arc::new(LiteralLongExpression {
                 value: literal_long.val,
             }),
@@ -120,7 +123,12 @@ impl DefaultQueryPlanner {
                     None => panic!("column not found in schema"),
                 }
             }
-            _ => panic!("not yet implemented"),
+            LogicalExprType::Eq(eq) => {
+                let left = self.create_physical_expr(eq.left.clone(), input);
+                let right = self.create_physical_expr(eq.right.clone(), input);
+                Arc::new(EqExpression { left, right })
+            }
+            _ => panic!("not yet implemented: {}", logical_expr_type),
         }
     }
 }

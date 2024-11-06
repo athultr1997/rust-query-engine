@@ -1,4 +1,5 @@
 use arrow::array::{Array, BooleanArray};
+use arrow::record_batch;
 use expression::{AggregateExpression, Expression};
 
 use crate::datasources::DataSource;
@@ -122,16 +123,21 @@ impl Iterator for ProjectionIterator {
     type Item = RecordBatch;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let record_batch = Arc::new(self.input_iter.lock().unwrap().next().unwrap());
-        let columns = self
-            .expressions
-            .iter()
-            .map(|e| e.evaluate(record_batch.clone()))
-            .collect();
-        Some(RecordBatch {
-            schema: self.schema.clone(),
-            field_vectors: columns,
-        })
+        match self.input_iter.lock().unwrap().next() {
+            Some(record_batch) => {
+                let record_batch = Arc::new(record_batch);
+                let columns = self
+                    .expressions
+                    .iter()
+                    .map(|e| e.evaluate(record_batch.clone()))
+                    .collect();
+                Some(RecordBatch {
+                    schema: self.schema.clone(),
+                    field_vectors: columns,
+                })
+            }
+            None => None,
+        }
     }
 }
 
@@ -178,7 +184,8 @@ impl PhysicalPlan for FilterExec {
 
 impl Display for FilterExec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        todo!()
+        let expr_str = self.expression.as_ref().to_string();
+        write!(f, "FilterExec: [{}]", expr_str)
     }
 }
 
@@ -193,22 +200,26 @@ impl Iterator for FilterExecIterator {
 
     // TODO: Solve the additional cloning of RecordBatch here.
     fn next(&mut self) -> Option<Self::Item> {
-        let input_record_batch = self.input_iter.lock().unwrap().next().unwrap();
-        let output_column_count = input_record_batch.schema.fields.len();
-        let result = self.expr.evaluate(input_record_batch.clone().into());
-        let output_schema = self.schema.clone();
-        let mut filtered_fields = vec![];
-        for index in 0..output_column_count {
-            let filtered_field = self.filter_rows(
-                input_record_batch.field_vectors[index].clone(),
-                result.clone(),
-            );
-            filtered_fields.push(filtered_field);
+        match self.input_iter.lock().unwrap().next() {
+            Some(input_record_batch) => {
+                let output_column_count = input_record_batch.schema.fields.len();
+                let result = self.expr.evaluate(input_record_batch.clone().into());
+                let output_schema = self.schema.clone();
+                let mut filtered_fields = vec![];
+                for index in 0..output_column_count {
+                    let filtered_field = self.filter_rows(
+                        input_record_batch.field_vectors[index].clone(),
+                        result.clone(),
+                    );
+                    filtered_fields.push(filtered_field);
+                }
+                Some(RecordBatch {
+                    schema: output_schema,
+                    field_vectors: filtered_fields,
+                })
+            }
+            None => None,
         }
-        Some(RecordBatch {
-            schema: output_schema,
-            field_vectors: filtered_fields,
-        })
     }
 }
 

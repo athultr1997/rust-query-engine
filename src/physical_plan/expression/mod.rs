@@ -82,6 +82,37 @@ pub trait BooleanExpression: Expression {
     }
 }
 
+pub struct EqExpression {
+    pub left: Arc<dyn Expression>,
+    pub right: Arc<dyn Expression>,
+}
+
+impl BooleanExpression for EqExpression {
+    fn left(&self) -> Arc<dyn Expression> {
+        self.left.clone()
+    }
+
+    fn right(&self) -> Arc<dyn Expression> {
+        self.right.clone()
+    }
+
+    fn evaluate_boolean(&self, l: ScalarValue, r: ScalarValue, _data_type: &DataType) -> bool {
+        l == r
+    }
+}
+
+impl Expression for EqExpression {
+    fn evaluate(&self, input: Arc<RecordBatch>) -> Arc<dyn ColumnVector> {
+        BooleanExpression::evaluate(self, input)
+    }
+}
+
+impl Display for EqExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} = {}", self.left, self.right)
+    }
+}
+
 pub struct AndExpression {
     left: Arc<dyn Expression>,
     right: Arc<dyn Expression>,
@@ -128,6 +159,26 @@ impl Expression for LiteralLongExpression {
 impl Display for LiteralLongExpression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         todo!("Not implemented LiteralLongExpression Display")
+    }
+}
+
+pub struct LiteralStringExpression {
+    pub value: String,
+}
+
+impl Expression for LiteralStringExpression {
+    fn evaluate(&self, input: Arc<RecordBatch>) -> Arc<dyn ColumnVector> {
+        Arc::new(LiteralValueVector {
+            data_type: DataType::StringType,
+            value: ScalarValue::String(self.value.clone()),
+            size: input.row_count(),
+        })
+    }
+}
+
+impl Display for LiteralStringExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.value)
     }
 }
 
