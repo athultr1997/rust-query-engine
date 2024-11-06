@@ -4,7 +4,7 @@ use std::{any::Any, cmp::Ordering, collections::HashSet, fmt::Debug, hash::Hash,
 use arrow::{
     array::{
         Array, ArrayAccessor, ArrayBuilder, BooleanArray, Int16Array, Int16Builder, Int32Array,
-        Int8Array, Int8Builder, StringArray,
+        Int8Array, Int8Builder, StringArray, StringBuilder,
     },
     datatypes::{DataType as ArrowDataType, Field as ArrowField, Int8Type, Schema as ArrowSchema},
 };
@@ -339,6 +339,7 @@ impl FieldVectorBuilder {
         let builder: Box<dyn ArrayBuilder> = match data_type {
             DataType::Int8Type => Box::new(Int8Builder::new()),
             DataType::Int16Type => Box::new(Int16Builder::new()),
+            DataType::StringType => Box::new(StringBuilder::new()),
             _ => panic!("Not yet implemented"),
         };
         FieldVectorBuilder { data_type, builder }
@@ -350,6 +351,13 @@ impl FieldVectorBuilder {
                 self.builder
                     .as_any_mut()
                     .downcast_mut::<Int8Builder>()
+                    .unwrap()
+                    .append_value(v);
+            }
+            (DataType::StringType, ScalarValue::String(v)) => {
+                self.builder
+                    .as_any_mut()
+                    .downcast_mut::<StringBuilder>()
                     .unwrap()
                     .append_value(v);
             }

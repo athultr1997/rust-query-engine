@@ -4,9 +4,12 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use arrow::array::{
-    BooleanBuilder, Float16Builder, Float32Builder, Int16Builder, Int32Builder, Int64Builder,
-    Int8Builder, StringBuilder,
+use arrow::{
+    array::{
+        BooleanBuilder, Float16Builder, Float32Builder, Int16Builder, Int32Builder, Int64Builder,
+        Int8Builder, StringBuilder,
+    },
+    record_batch,
 };
 use csv::{Reader, StringRecord};
 
@@ -88,7 +91,8 @@ impl Iterator for ReadIterator {
         if rows.is_empty() {
             return None;
         }
-        Some(self.create_record_batch(rows))
+        let record_batch = self.create_record_batch(rows);
+        Some(record_batch)
     }
 }
 
